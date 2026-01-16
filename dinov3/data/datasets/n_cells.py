@@ -21,7 +21,12 @@ _ALL_DATASETS = [
     "N_CMP_15_17_and_TNBC","N_CoNIC","N_CryoNuSeg","N_DynamicNuclearNet",
     "N_IHC_TMA","N_MoNuSAC","N_MoNuSeg","N_Neurips","N_NuInsSeg","N_PanNuke",
     "N_Phenoplex","N_cyto2","N_databowl","N_iPSC_Morpologies","N_iPSC_QCData",
-    "N_lynsec13","N_omnipose","N_tissuenet","N_yeaz","N_Helmholtz",
+    "N_lynsec13","N_omnipose","N_tissuenet","N_yeaz","N_Helmholtz", 
+    'Centrosome', 'Cytosol', 'Endoplasmic_reticulum',
+    'Golgi_apparatus', 'Intermediate_filaments', 'Mitochondria',
+    'Nuclear_bodies', 'Nuclear_speckles', 'Nucleoli',
+    'Nucleoli_fibrillar_center', 'Nucleuoplasm', 'Plasma_membrane', 'Astrocyte', 'Dead Cell', 'Neuron', 'OPC',
+    'BBBC048', 'Vishwa_pertubation_2', 'jumpcp', 'pertubation'
 ]
 
 _PER_DATASET_LIMITS = {k: -1 for k in _ALL_DATASETS}
@@ -328,21 +333,25 @@ class NCells(ExtendedVisionDataset):
 
     def get_image_data(self, index: int) -> bytes:
         img_path = self._rows[index][0]
-        mmap = "r" if self.mmap_images else None
-        img = np.load(img_path, allow_pickle=False, mmap_mode=mmap)  # HxWx3 npy
-        if img.ndim == 2:
-            img = img[..., None]
-        if img.shape[-1] == 1:
-            img = np.repeat(img[..., :1], 3, axis=-1)
-        # Convert floats -> uint8; clip safety
-        if np.issubdtype(img.dtype, np.floating):
-            arr = np.clip(img, 0.0, 1.0)
-            arr = (arr * 255.0).round().astype("uint8")
+        
+        # Handle both .npy and image files (jpg, png, etc.)
+        if img_path.endswith('.npy'):
+            mmap = "r" if self.mmap_images else None
+            img = np.load(img_path, allow_pickle=False, mmap_mode=mmap)
+            if img.ndim == 2:
+                img = img[..., None]
+            if img.shape[-1] == 1:
+                img = np.repeat(img[..., :1], 3, axis=-1)
+            if np.issubdtype(img.dtype, np.floating):
+                arr = np.clip(img, 0.0, 1.0)
+                arr = (arr * 255.0).round().astype("uint8")
+            else:
+                arr = img.astype("uint8", copy=False)
+            arr = np.ascontiguousarray(arr)
+            return Image.fromarray(arr)
         else:
-            arr = img.astype("uint8", copy=False)
-        # Ensure contiguous (PIL likes contiguous arrays)
-        arr = np.ascontiguousarray(arr)
-        return Image.fromarray(arr)  # mode inferred (RGB)
+            # Handle JPG, PNG, etc.
+            return Image.open(img_path).convert('RGB')
 
     def get_target(self, index: int) -> str:
         label = self._rows[index][2]

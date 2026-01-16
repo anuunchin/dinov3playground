@@ -10,7 +10,7 @@ from distinctipy import get_colors, get_colormap
 from torchvision.transforms import functional as TF
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-def make_robust_collate_fn(target_size: int = 224):
+def make_robust_collate_fn(target_size: int = 224, num_channels: int = 3):
     """
     Collate that:
       - converts all tensors to float32 and contiguous
@@ -34,27 +34,43 @@ def make_robust_collate_fn(target_size: int = 224):
             if t.ndim != 3:
                 raise RuntimeError(f"unexpected image ndim: {t.ndim}, expected 3 (C,H,W)")
             c, h, w = t.shape
-            if c == 1:
+
+            # for microsnoop
+            if num_channels == 1 and c == 3:
+                for i in range(3):
+                    ch = t[i:i+1]  # (1,H,W)
+                    if ch.shape[-2:] != (target_size, target_size):
+                        ch = F.interpolate(ch.unsqueeze(0), (target_size, target_size),
+                                           mode="bilinear", align_corners=False).squeeze(0)
+                    imgs.append(ch)         # (1,H,W)
+                    labels.append(label)    # duplicate label
+                continue
+
+            # original path
+            #if c == 1:
+            #    # repeat grayscale -> RGB
+            #    t = t.repeat(3, 1, 1)
+            #elif c >= 3:
+            #    # take first 3 channels
+            #    if c > 3:
+            #        t = t[:3, :, :]
+
+
+            if c < num_channels:
                 # repeat grayscale -> RGB
-                t = t.repeat(3, 1, 1)
-            elif c >= 3:
-                # take first 3 channels
-                if c > 3:
-                    t = t[:3, :, :]
-            # now t is 3 x H x W
+                t = t.repeat(num_channels // c + (1 if num_channels % c else 0), 1, 1)[:num_channels]
+            elif c > num_channels:
+                t = t[:num_channels]
+
+            # resize if needed
+            if t.shape[-2:] != (target_size, target_size):
+                t = F.interpolate(t.unsqueeze(0), (target_size, target_size), mode="bilinear", align_corners=False).squeeze(0)
+
+            # now t is num_channles x H x W
             imgs.append(t)
             labels.append(label)
 
-        # resize each to (3, target_size, target_size)
-        resized = []
-        for t in imgs:
-            if t.shape[1] == target_size and t.shape[2] == target_size:
-                resized.append(t)
-            else:
-                t4 = t.unsqueeze(0)  # 1,3,H,W
-                t_res = F.interpolate(t4, size=(target_size, target_size), mode="bilinear", align_corners=False)
-                resized.append(t_res.squeeze(0))
-        batch_images = torch.stack(resized, dim=0)  # B,3,H,W
+        batch_images = torch.stack(imgs, dim=0)  # B,3,H,W
 
         return {
             "image": batch_images,
@@ -87,13 +103,17 @@ def extract_embeddings(
     batch_size=64,
     num_workers=4,
     target_size=224,
+    num_channels=3,
+    preserve_dataset_transform=False,
 ):
-    collate_fn = make_robust_collate_fn(target_size=target_size)
+    collate_fn = make_robust_collate_fn(target_size=target_size, num_channels=num_channels)
 
     # --- override the BASE dataset's transform (not the Subset wrapper) ---
     base_ds = _unwrap_dataset(dataset)
     old_transform = getattr(base_ds, "transform", None)
-    base_ds.transform = ImageOnlyToTensor()   # drop seg + to_tensor only
+
+    if not preserve_dataset_transform:
+        base_ds.transform = ImageOnlyToTensor()   # drop seg + to_tensor only
 
     try:
         loader = DataLoader(
